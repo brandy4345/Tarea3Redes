@@ -1,5 +1,6 @@
 import socket
 import random
+import time
 class SocketTCP:
     def __init__(self):
         self.sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
@@ -46,17 +47,24 @@ class SocketTCP:
     #lado cliente
     def connect(self,address):
         num = random.randint(0,100) #Secuencia inicial aleatoria entre 0 y 100
-        self.sock.sendto(self.create_segment(self.make_dict_seg("0","1","0",str(num),"")),address) #Se envia una peticion tipo SYN
-
-        data, new_address = self.sock.recvfrom(self.buffer_size) #Esperamos el SYN+ACK con seq=num+1
-        parsed_seg = self.parse_segment(data)
-        if parsed_seg["SYN"] =="1" and parsed_seg["ACK"] =="1" and parsed_seg["SEQ"] == str(num+1):
-            print("yipee")
+        syn = self.create_segment(self.make_dict_seg("0","1","0",str(num),""))
+        self.sock.settimeout(self.timeout)
+        while True:
+            try:
+                self.sock.sendto(syn,address) #Se envia una peticion tipo SYN
+                data, new_address = self.sock.recvfrom(self.buffer_size) #Esperamos el SYN+ACK con seq=num+1
+                parsed_seg = self.parse_segment(data)
+                if parsed_seg["SYN"] =="1" and parsed_seg["ACK"] =="1" and parsed_seg["SEQ"] == str(num+1):
+                    print("conectado al servidor")
+                    break
+            except socket.timeout:
+                continue
         
         self.IP_destino,self.PORT_destino = new_address
         num +=2 #seq = num+2
         self.seq_num = num
-        self.sock.sendto(self.create_segment(self.make_dict_seg("1","0","0",str(num),"")),new_address) #Enviamos ACK con seq=num+2
+        ack = self.create_segment(self.make_dict_seg("1","0","0",str(num),""))
+        self.sock.sendto(ack,new_address) #Enviamos ACK con seq=num+2
     #lado servidor
     def accept(self):
         while True:
@@ -70,13 +78,18 @@ class SocketTCP:
             new_ip,new_port = new_sock.sock.getsockname()
             new_sock.IP_destino, new_sock.PORT_destino = client_address
 
-            new_sock.sock.sendto(self.create_segment(self.make_dict_seg("1","1","0",str(num+1),"")),client_address)
-
-            new_data,client_address = new_sock.sock.recvfrom(self.buffer_size)
-            new_seg = self.parse_segment(new_data)
-            if new_seg["ACK"]=="1" and new_seg["SEQ"]== str(num+2):
-                new_sock.seq_num= num+2
-                return new_sock, (new_ip,new_port)
+            ack_syn = self.create_segment(self.make_dict_seg("1","1","0",str(num+1),""))
+            while True:
+                try:
+                    new_sock.sock.sendto(ack_syn,client_address)
+                    new_data,client_address = new_sock.sock.recvfrom(self.buffer_size)
+                    new_seg = self.parse_segment(new_data)
+                    if (new_seg["ACK"]=="1" or new_seg["SYN"]=="0") and new_seg["SEQ"]== str(num+2):
+                        new_sock.seq_num= num+2
+                        new_sock.sock.settimeout(None)
+                        return new_sock, (new_ip,new_port)
+                except socket.timeout:
+                    continue
     def send_seg(self,seg_msg,L_msg):
         seq_exp = self.seq_num + L_msg
         while True:
@@ -130,32 +143,30 @@ class SocketTCP:
         return a.encode()
     def close(self):
         self.sock.settimeout(self.timeout)
-        close_seg = self.create_segment(self.make_dict_seg("0","0","1",str(self.seq_num),""))
+        fin = self.create_segment(self.make_dict_seg("0","0","1",str(self.seq_num),""))
+        t = 0
+        has_received= False
         #Host A envia al Host B el FIN con seq=z
-        while True:
+        #Se envia 3 veces si no pasa nada se asume que se cerro
+        while t<3:
+            print("emviando fin ", t)
             try:
-                self.sock.sendto(close_seg,(self.IP_destino,self.PORT_destino))
+                self.sock.sendto(fin,(self.IP_destino,self.PORT_destino))
                 data, _ = self.sock.recvfrom(self.buffer_size)
                 pars_data = self.parse_segment(data)
                 #Recibimos el FIN+ACK con seq =z+1
                 if pars_data["ACK"]=="1" and pars_data["FIN"]=="1" and pars_data["SEQ"]==str(self.seq_num+1):
+                    has_received = True
                     break
             except socket.timeout:
-                continue
-        #Host A responde con un ACK y seq=z+2
-        ack = self.create_segment(self.make_dict_seg("1","0","0",str(self.seq_num+2),""))
-        
-        self.sock.sendto(ack,(self.IP_destino,self.PORT_destino))
-        #En caso que el Host B siga enviando FIN+ACK
-        for _ in range(6):
-            while True:
-                try:
-                    data, _ = self.sock.recvfrom(self.buffer_size)
-                except socket.timeout:
-                    break
-                pars_data = self.parse_segment(data)
-                if pars_data["ACK"]=="1" and pars_data["FIN"] =="1" and pars_data["SEQ"]==str(self.seq_num+1):
-                    self.sock.sendto(ack,(self.IP_destino,self.PORT_destino ))
+                t+=1
+        if has_received:
+            #Host A responde con un ACK y seq=z+2
+            ack = self.create_segment(self.make_dict_seg("1","0","0",str(self.seq_num+2),""))  
+            for i in range(3):
+                print('enviando el ultimo ack', i+1)
+                self.sock.sendto(ack,(self.IP_destino,self.PORT_destino))
+                time.sleep(self.timeout)
         #Terminamos conexion
         self.sock.close()
 
@@ -169,13 +180,16 @@ class SocketTCP:
                 break
         ack_fin = self.create_segment(self.make_dict_seg("1","0","1",str(self.seq_num+1),""))
         self.sock.settimeout(self.timeout)
+        t = 0
         #enviamos el ACK + FIN y seq=z+1
-        while True:
+        while t <3:
+            print('enviando ack + fin ',t)
             try:
                 self.sock.sendto(ack_fin,(self.IP_destino,self.PORT_destino))
                 data,_ = self.sock.recvfrom(self.buffer_size)
                 
             except socket.timeout:
+                t+=1
                 continue
             pars_data= self.parse_segment(data)
             #si recibimos el ACK y seq=z+2 terminamos conexion sino seguimos enviando el ACK
