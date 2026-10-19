@@ -1,0 +1,3 @@
+hola soy un  archivo de texto
+estoy probando
+adios
