@@ -1,36 +1,29 @@
 import socket
 from t3 import SocketTCP
+import sys
 
-IP_VM ="localhost"
-PORT= 8000
 BUFFER_SIZE= 150
 #cantidad de bytes maximos que se enviaran
 BYTES_Q = 16
 
 def main ():
-    #ruta= input("Ingrese ruta de archivo: ")
-    ruta = "test.txt"
-    with open(ruta,"rb") as f:
-        file = f.read().decode()
-    address = (IP_VM,PORT)
+    if len(sys.argv)!=3:
+        print("error: No hay suficientes argumentos")
+        sys.exit(1)
+
+    IP = sys.argv[1]
+    PORT = int(sys.argv[2])
+
+    file = sys.stdin.buffer.read().decode()
+    
+    address = (IP,PORT)
+    print("creando socket cliente...")
     client_socketTCP = SocketTCP()
+    print("conectando a servidor...")
     client_socketTCP.connect(address)
+    print("enviando archivo...")
     client_socketTCP.send(file)
-    '''
-    sock= socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-    address = (IP_VM,PORT)
-    for i in range(0,len(file),BYTES_Q):
-        seg = {
-            "ACK": "0",
-            "SYN": "0",
-            "FIN": "0",
-            "SEQ": "0000000000001",
-            "DATA": file[i:i+BYTES_Q]
-        }
-        sock.sendto(socketTCP.create_segment(seg),address)
-        data,server_address = sock.recvfrom(BUFFER_SIZE)
-        print("servidor: ", data.decode())
-    sock.close()
-    '''
+    print("cerrando conexion...")
+    client_socketTCP.close()
 if __name__ == "__main__":
     main()
